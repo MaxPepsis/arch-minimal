@@ -76,6 +76,55 @@ if [[ "$USE_SWAP" =~ ^[sS]$ ]]; then
     read -p "¿Vas a usar hibernación? [s/N]: " HIB
     HIB=${HIB:-N}
     if (( MEM_GIB < 2 )); then
+        SWAP_MIN=$((MEM_GIB * 2))
+        if [[ "$HIB" =~ ^[sS]$ ]]; then
+            SWAP_MIN=$((MEM_GIB * 3))
+        fi
+    elif (( MEM_GIB < 8 )); then
+        SWAP_MIN=$MEM_GIB
+        if [[ "$HIB" =~ ^[sS]$ ]]; then
+            SWAP_MIN=$((MEM_GIB * 2))
+        fi
+    elif (( MEM_GIB < 64 )); then
+        SWAP_MIN=4
+        if [[ "$HIB" =~ ^[sS]$ ]]; then
+            SWAP_MIN=$(printf "%d" "$(echo "${MEM_GIB} * 1.5" | bc)")
+        fi
+    else
+        SWAP_MIN=4
+        if [[ "$HIB" =~ ^[sS]$ ]]; then
+            echo "⚠️ Hibernación no recomendada con RAM >64G, se mantiene SWAP mínimo"
+        fi
+    fi
+    # Asegurar mínimo de 2GiB si el cálculo resultara en <=2GiB
+    if (( SWAP_MIN <= 2 )); then
+        SWAP_MIN=$((MEM_GIB * 2))
+        if (( SWAP_MIN <= 2 )); then
+            SWAP_MIN=2
+        fi
+    fi
+    echo "Tamaño de SWAP recomendado: ${SWAP_MIN}G"
+    while true; do
+        read -p "Tamaño de SWAP (ej: ${SWAP_MIN}G, puedes ajustar): " SWAP_RAW
+        SWAP_RAW=${SWAP_RAW:-${SWAP_MIN}G}
+        SWAP_GIB=$(convert_to_gib "$SWAP_RAW")
+        if (( SWAP_GIB < SWAP_MIN )); then
+            echo "❌ Debe ser al menos ${SWAP_MIN}G para tu configuración de RAM/hibernación"
+        else
+            echo "✅ SWAP: ${SWAP_GIB}G"
+            break
+        fi
+    done
+else
+    echo "ℹ️ Omitiendo partición SWAP"
+fi========
+read -p "¿Deseas usar SWAP? [s/N]: " USE_SWAP
+USE_SWAP=${USE_SWAP:-N}
+SWAP_GIB=0
+if [[ "$USE_SWAP" =~ ^[sS]$ ]]; then
+    read -p "¿Vas a usar hibernación? [s/N]: " HIB
+    HIB=${HIB:-N}
+    if (( MEM_GIB < 2 )); then
         SWAP_MIN=$((MEM_GIB*2))
         if [[ "$HIB" =~ ^[sS]$ ]]; then
             SWAP_MIN=$((MEM_GIB*3))
