@@ -28,27 +28,37 @@ convert_to_gib() {
 # CONFIGURACIÓN INICIAL
 # ==========================================================
 echo ">>> Instalador de particiones interactivo"
-read -p "¿Deseas configurar dual boot? [s/N]: " DUAL
-DUAL=${DUAL:-N}
+echo ">>> Al usar esta herramienta, confirma que entiendes que borrará todos los datos."
+read -p "¿Deseas continuar con la instalación? [s/N]: " CONFIRM
+if [[ ! "$CONFIRM" =~ ^[sS]$ ]]; then
+    echo "Cancelado por el usuario."
+    exit 1
+fi
 
+# Limpia completamente el disco al inicio
 read -p "Introduce la ruta de tu disco (ej: /dev/sda): " DISK
 if [[ ! -b "$DISK" ]]; then
     echo "❌ Disco inválido."; exit 1
 fi
 
-# Limpiar disco si NO es dual boot
-if [[ ! "$DUAL" =~ ^[sS]$ ]]; then
-    echo "🔴 Instalación limpia: borrando tabla de particiones existente"
-    sgdisk --zap-all "$DISK"
+echo "🔴 Instalación limpia: borrando tabla de particiones existente"
+sgdisk --zap-all "$DISK"
+
+# Detectar UEFI y configurar EFISTUB automáticamente
+IS_UEFI=false
+EFI_SIZE=0
+if [ -d /sys/firmware/efi ]; then
+    IS_UEFI=true
+    EFI_SIZE=1  # para cálculos, crea partición EFI de 300MiB
+    echo "✅ Detectado UEFI: se creará partición EFI de 300MiB para EFISTUB"
 else
-    echo "🟢 Dual boot: se conservarán particiones existentes"
+    echo "ℹ️ Modo BIOS detectado: no se creará partición EFI"
 fi
 
 # Obtiene memoria y disco
 MEM_KB=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
 MEM_GIB=$((MEM_KB/1024/1024))
-DISK_SIZE=$(lsblk -b -n -d -o SIZE "$DISK")
-DISK_GIB=$((DISK_SIZE/1024/1024/1024))
+DISK_GIB=$(( $(lsblk -b -n -d -o SIZE "$DISK") /1024/1024/1024 ))
 
 echo "Disco: $DISK (${DISK_GIB}G) | RAM total: ${MEM_GIB}G"
 
@@ -94,40 +104,22 @@ fi
 # ==========================================================
 # ORDEN DE CREACIÓN: EFI -> SWAP -> ROOT -> HOME
 # ==========================================================
-# EFI
-IS_UEFI=false
-if [ -d /sys/firmware/efi ]; then
-    IS_UEFI=true
-fi
-EFI_SIZE=0
-if $IS_UEFI; then
-    read -p "¿Crear partición EFI de 300M? [S/n]: " EFI_ASK
-    EFI_ASK=${EFI_ASK:-S}
-    if [[ "$EFI_ASK" =~ ^[sS]$ ]]; then
-        EFI_SIZE=1  # Contamos 1G para cálculo redondeado, la creamos como 300M
-        echo "✅ EFI: 300M"
-    else
-        echo "ℹ️ Omitiendo partición EFI"
-    fi
-fi
-
 # ROOT
-# Ajustar espacio usado hasta ahora
 USED=$(( EFI_SIZE + SWAP_GIB ))
 AVAILABLE_GIB=$(( DISK_GIB - USED ))
 while true; do
     read -p "Tamaño de ROOT (disp: ${AVAILABLE_GIB}G) (ej: 20G): " ROOT_RAW
     ROOT_GIB=$(convert_to_gib "$ROOT_RAW")
     if (( ROOT_GIB <= 0 || ROOT_GIB > AVAILABLE_GIB )); then
-        echo "❌ Invalido. Usa 1-${AVAILABLE_GIB}G"
+        echo "❌ Inválido. Usa 1-${AVAILABLE_GIB}G"
     else
         echo "✅ ROOT: ${ROOT_GIB}G"; break
     fi
 done
 
 # HOME opcional
-total_used=$(( USED + ROOT_GIB ))
-AVAILABLE_GIB=$(( DISK_GIB - total_used ))
+USED=$(( USED + ROOT_GIB ))
+AVAILABLE_GIB=$(( DISK_GIB - USED ))
 read -p "Crear /home? Espacio dispo: ${AVAILABLE_GIB}G [s/N]: " HOME_ASK
 HOME_SIZE=0
 if [[ "$HOME_ASK" =~ ^[sS]$ ]] && (( AVAILABLE_GIB > 0 )); then
@@ -135,7 +127,7 @@ if [[ "$HOME_ASK" =~ ^[sS]$ ]] && (( AVAILABLE_GIB > 0 )); then
         read -p "Tamaño de /home (1-${AVAILABLE_GIB}G): " HOME_RAW
         HOME_GIB=$(convert_to_gib "$HOME_RAW")
         if (( HOME_GIB <= 0 || HOME_GIB > AVAILABLE_GIB )); then
-            echo "❌ Invalido"
+            echo "❌ Inválido"
         else
             HOME_SIZE=$HOME_GIB; echo "✅ /home: ${HOME_SIZE}G"; break
         fi
@@ -148,10 +140,10 @@ fi
 # RESUMEN FINAL
 # ==========================================================
 echo -e "\n== Resumen de particiones en $DISK =="
-$([[ $EFI_SIZE -gt 0 ]] && echo "EFI: 300M")
-$([[ $USE_SWAP =~ ^[sS]$ ]] && echo "SWAP: ${SWAP_GIB}G")
+[[ $EFI_SIZE -gt 0 ]] && echo "EFI: 300M"
+[[ $USE_SWAP =~ ^[sS]$ ]] && echo "SWAP: ${SWAP_GIB}G"
 echo "ROOT: ${ROOT_GIB}G"
-$([[ $HOME_SIZE -gt 0 ]] && echo "/home: ${HOME_SIZE}G")
+[[ $HOME_SIZE -gt 0 ]] && echo "/home: ${HOME_SIZE}G"
 echo "Espacio libre: $(( DISK_GIB - EFI_SIZE - SWAP_GIB - ROOT_GIB - HOME_SIZE ))G"
 
 read -p "Proceder con fdisk? [s/N]: " GO
@@ -162,12 +154,12 @@ if [[ ! "$GO" =~ ^[sS]$ ]]; then echo "Cancelado"; exit 1; fi
 # ==========================================================
 {
     # EFI
-    if $IS_UEFI && (( EFI_SIZE > 0 )); then
+    if (( EFI_SIZE > 0 )); then
         echo "g"
         echo "n"; echo; echo; echo "+300M"
         echo "t"; echo "1"
     else
-        $([[ ! $IS_UEFI ]] && echo "o")
+        echo $([[ ! $IS_UEFI ]] && echo "o")
     fi
     # SWAP
     if [[ $USE_SWAP =~ ^[sS]$ ]]; then
