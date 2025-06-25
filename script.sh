@@ -139,14 +139,59 @@ read -p "Proceder con fdisk? [s/N]: " GO
 [[ "$GO" =~ ^[sS]$ ]] || { echo "Cancelado"; exit 1; }
 
 # ==========================================================
-# fdisk
+# CREACIÓN DE PARTICIONES con fdisk
 # ==========================================================
-{
-    ((EFI_SIZE)) && { echo g; echo n; echo; echo; echo +300M; echo t; echo 1; } || echo o
-    if [[ "$USE_SWAP" =~ ^[sS]$ ]]; then echo n; echo; echo; echo +${SWAP_GIB}G; echo t; echo; echo 82; fi
-    echo n; echo; echo; echo +${ROOT_GIB}G
-    ((HOME_GIB)) && { echo n; echo; echo; echo +${HOME_GIB}G; }
-    echo w
-} | fdisk "$DISK"
+if $IS_UEFI; then
+    # GPT + EFI
+    fdisk "$DISK" <<EOF
+ g      # crear GPT
+ n      # nueva partición EFI
 
-echo "✅ Particiones creadas."
+ +300M
+ t      # cambiar tipo
+ 1      # EFI System
+ n      # swap
+
+ +${SWAP_GIB}G
+ t      # cambiar tipo
+ 2
+ 82    # Linux swap
+ n      # root
+
+ +${ROOT_GIB}G
+EOF
+    # partición /home
+    if (( HOME_GIB > 0 )); then
+        fdisk "$DISK" <<EOF
+ n
+
+ +${HOME_GIB}G
+EOF
+    fi
+    # Escribir cambios
+echo w | fdisk "$DISK"
+else
+    # MBR BIOS
+    fdisk "$DISK" <<EOF
+ o      # crear MBR
+ n      # swap
+
+ +${SWAP_GIB}G
+ t      # cambiar tipo
+ 1
+ 82    # Linux swap
+ n      # root
+
+ +${ROOT_GIB}G
+EOF
+    if (( HOME_GIB > 0 )); then
+        fdisk "$DISK" <<EOF
+ n
+
+ +${HOME_GIB}G
+EOF
+    fi
+    echo w | fdisk "$DISK"
+fi
+
+echo "✅ Particiones creadas exitosamente."
