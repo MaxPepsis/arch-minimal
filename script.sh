@@ -35,6 +35,10 @@ if [[ ! "$CONFIRM" =~ ^[sS]$ ]]; then
     exit 1
 fi
 
+# Mostrar lista de discos disponibles para que el usuario elija
+echo "Discos disponibles:";
+lsblk -d -p -o NAME,SIZE,MODEL,TYPE | grep disk;
+
 # Limpia completamente el disco al inicio
 read -p "Introduce la ruta de tu disco (ej: /dev/sda): " DISK
 if [[ ! -b "$DISK" ]]; then
