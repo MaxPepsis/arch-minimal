@@ -15,7 +15,6 @@ convert_to_gib() {
         m) # MiB a GiB (truncar)
             printf "%d" "$(echo "$num/1024" | bc)" ;;
         g)
-            # redondear hacia arriba si decimal
             if [[ "$num" =~ \.[0-9]+ ]]; then
                 printf "%d" "$(echo "$num+0.999" | bc)"
             else
@@ -54,27 +53,43 @@ DISK_GIB=$((DISK_SIZE/1024/1024/1024))
 echo "Disco: $DISK (${DISK_GIB}G) | RAM total: ${MEM_GIB}G"
 
 # ==========================================================
-# CALCULAR SWAP SEGÚN RAM E HIBERNACIÓN
+# CALCULAR SWAP SEGÚN RAM E HIBERNACIÓN (OPCIONAL)
 # ==========================================================
-read -p "¿Vas a usar hibernación? [s/N]: " HIB
-HIB=${HIB:-N}
-if (( MEM_GIB < 2 )); then
-    SWAP_MIN=$((MEM_GIB*2))
-    ((HIB =~ ^[sS]$)) && SWAP_MIN=$((MEM_GIB*3))
-elif (( MEM_GIB < 8 )); then
-    SWAP_MIN=${MEM_GIB}
-    ((HIB =~ ^[sS]$)) && SWAP_MIN=$((MEM_GIB*2))
-elif (( MEM_GIB < 64 )); then
-    SWAP_MIN=4
-    ((HIB =~ ^[sS]$)) && SWAP_MIN=$(printf "%d" "$(echo "${MEM_GIB}*1.5" | bc)")
-else
-    SWAP_MIN=4
-    if ((HIB =~ ^[sS]$)); then
-        echo "⚠️ Hibernación no recomendada con RAM >64G, se mantiene SWAP mínimo"
+read -p "¿Deseas usar SWAP? [s/N]: " USE_SWAP
+USE_SWAP=${USE_SWAP:-N}
+SWAP_GIB=0
+if [[ "$USE_SWAP" =~ ^[sS]$ ]]; then
+    read -p "¿Vas a usar hibernación? [s/N]: " HIB
+    HIB=${HIB:-N}
+    if (( MEM_GIB < 2 )); then
+        SWAP_MIN=$((MEM_GIB*2))
+        ((HIB =~ ^[sS]$)) && SWAP_MIN=$((MEM_GIB*3))
+    elif (( MEM_GIB < 8 )); then
+        SWAP_MIN=${MEM_GIB}
+        ((HIB =~ ^[sS]$)) && SWAP_MIN=$((MEM_GIB*2))
+    elif (( MEM_GIB < 64 )); then
+        SWAP_MIN=4
+        ((HIB =~ ^[sS]$)) && SWAP_MIN=$(printf "%d" "$(echo "${MEM_GIB}*1.5" | bc)")
+    else
+        SWAP_MIN=4
+        if ((HIB =~ ^[sS]$)); then
+            echo "⚠️ Hibernación no recomendada con RAM >64G, se mantiene SWAP mínimo"
+        fi
     fi
+    echo "Tamaño de SWAP recomendado: ${SWAP_MIN}G"
+    while true; do
+        read -p "Tamaño de SWAP (ej: ${SWAP_MIN}G, puedes ajustar): " SWAP_RAW
+        SWAP_RAW=${SWAP_RAW:-${SWAP_MIN}G}
+        SWAP_GIB=$(convert_to_gib "$SWAP_RAW")
+        if (( SWAP_GIB < SWAP_MIN )); then
+            echo "❌ Debe ser al menos ${SWAP_MIN}G para tu configuración de RAM/hibernación"
+        else
+            echo "✅ SWAP: ${SWAP_GIB}G"; break
+        fi
+    done
+else
+    echo "ℹ️ Omitiendo partición SWAP"
 fi
-
-echo "Tamaño de SWAP recomendado: ${SWAP_MIN}G"
 
 # ==========================================================
 # ORDEN DE CREACIÓN: EFI -> SWAP -> ROOT -> HOME
@@ -84,33 +99,22 @@ IS_UEFI=false
 if [ -d /sys/firmware/efi ]; then
     IS_UEFI=true
 fi
+EFI_SIZE=0
 if $IS_UEFI; then
     read -p "¿Crear partición EFI de 300M? [S/n]: " EFI_ASK
     EFI_ASK=${EFI_ASK:-S}
     if [[ "$EFI_ASK" =~ ^[sS]$ ]]; then
-        EFI_SIZE_RAW="300M"
-        EFI_SIZE=0.3
+        EFI_SIZE=1  # Contamos 1G para cálculo redondeado, la creamos como 300M
         echo "✅ EFI: 300M"
     else
-        EFI_SIZE=0
+        echo "ℹ️ Omitiendo partición EFI"
     fi
 fi
 
-# SWAP
-while true; do
-    read -p "Tamaño de SWAP (ej: ${SWAP_MIN}G, puedes ajustar): " SWAP_RAW
-    SWAP_RAW=${SWAP_RAW:-${SWAP_MIN}G}
-    SWAP_GIB=$(convert_to_gib "$SWAP_RAW")
-    if (( SWAP_GIB < SWAP_MIN )); then
-        echo "❌ Debe ser al menos ${SWAP_MIN}G para tu configuración de RAM/hibernación"
-    else
-        echo "✅ SWAP: ${SWAP_GIB}G"; break
-    fi
-done
-
 # ROOT
-total_used=$(( EFI_SIZE + SWAP_GIB ))
-AVAILABLE_GIB=$(( DISK_GIB - total_used ))
+# Ajustar espacio usado hasta ahora
+USED=$(( EFI_SIZE + SWAP_GIB ))
+AVAILABLE_GIB=$(( DISK_GIB - USED ))
 while true; do
     read -p "Tamaño de ROOT (disp: ${AVAILABLE_GIB}G) (ej: 20G): " ROOT_RAW
     ROOT_GIB=$(convert_to_gib "$ROOT_RAW")
@@ -122,7 +126,7 @@ while true; do
 done
 
 # HOME opcional
-total_used=$(( total_used + ROOT_GIB ))
+total_used=$(( USED + ROOT_GIB ))
 AVAILABLE_GIB=$(( DISK_GIB - total_used ))
 read -p "Crear /home? Espacio dispo: ${AVAILABLE_GIB}G [s/N]: " HOME_ASK
 HOME_SIZE=0
@@ -144,10 +148,10 @@ fi
 # RESUMEN FINAL
 # ==========================================================
 echo -e "\n== Resumen de particiones en $DISK =="
-[[ $EFI_SIZE > 0 ]] && echo "EFI: 300M"
-echo "SWAP: ${SWAP_GIB}G"
+$([[ $EFI_SIZE -gt 0 ]] && echo "EFI: 300M")
+$([[ $USE_SWAP =~ ^[sS]$ ]] && echo "SWAP: ${SWAP_GIB}G")
 echo "ROOT: ${ROOT_GIB}G"
-[[ $HOME_SIZE > 0 ]] && echo "/home: ${HOME_SIZE}G"
+$([[ $HOME_SIZE -gt 0 ]] && echo "/home: ${HOME_SIZE}G")
 echo "Espacio libre: $(( DISK_GIB - EFI_SIZE - SWAP_GIB - ROOT_GIB - HOME_SIZE ))G"
 
 read -p "Proceder con fdisk? [s/N]: " GO
@@ -159,15 +163,17 @@ if [[ ! "$GO" =~ ^[sS]$ ]]; then echo "Cancelado"; exit 1; fi
 {
     # EFI
     if $IS_UEFI && (( EFI_SIZE > 0 )); then
-        echo "g"      # GPT
-        echo "n"; echo; echo; echo "+300M"  # EFI
+        echo "g"
+        echo "n"; echo; echo; echo "+300M"
         echo "t"; echo "1"
     else
-        echo $([[ ! $IS_UEFI ]] && echo "o")
+        $([[ ! $IS_UEFI ]] && echo "o")
     fi
     # SWAP
-    echo "n"; echo; echo; echo "+${SWAP_GIB}G"
-    echo "t"; echo; echo "82"
+    if [[ $USE_SWAP =~ ^[sS]$ ]]; then
+        echo "n"; echo; echo; echo "+${SWAP_GIB}G"
+        echo "t"; echo; echo "82"
+    fi
     # ROOT
     echo "n"; echo; echo; echo "+${ROOT_GIB}G"
     # HOME
