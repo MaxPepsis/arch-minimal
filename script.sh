@@ -12,15 +12,15 @@ convert_to_gib() {
     unit=$(echo "$size_input" | grep -oP '[MG]$' | tr '[:upper:]' '[:lower:]')
     [[ -z "$unit" ]] && unit="g"
     case "$unit" in
-        m) # MiB a GiB (truncar)
-            printf "%d" "$(echo "$num/1024" | bc)" ;;
+        m) printf "%d" "$(echo "$num/1024" | bc)" ;; # MiB a GiB truncado
         g)
             if [[ "$num" =~ \.[0-9]+ ]]; then
                 printf "%d" "$(echo "$num+0.999" | bc)"
             else
                 printf "%d" "$num"
-            fi;;
-        *)  echo "0" ;;
+            fi
+            ;;
+        *) echo "0" ;;
     esac
 }
 
@@ -35,9 +35,9 @@ if [[ ! "$CONFIRM" =~ ^[sS]$ ]]; then
     exit 1
 fi
 
-# Mostrar lista de discos disponibles para que el usuario elija
+# Mostrar lista de discos disponibles
 echo "Discos disponibles:";
-lsblk -d -p -o NAME,SIZE,MODEL,TYPE | grep disk;
+lsblk -d -p -o NAME,SIZE,MODEL,TYPE | grep disk
 
 # Limpia completamente el disco al inicio
 read -p "Introduce la ruta de tu disco (ej: /dev/sda): " DISK
@@ -53,14 +53,14 @@ IS_UEFI=false
 EFI_SIZE=0
 if [ -d /sys/firmware/efi ]; then
     IS_UEFI=true
-    EFI_SIZE=1  # para cálculos, crea partición EFI de 300MiB
+    EFI_SIZE=1  # para cálculos
     echo "✅ Detectado UEFI: se creará partición EFI de 300MiB para EFISTUB"
 else
     echo "ℹ️ Modo BIOS detectado: no se creará partición EFI"
 fi
 
 # Obtiene memoria y disco
-MEM_KB=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+MEM_KB=$(awk '/MemTotal/ {print $2}' /proc/meminfo || echo 0)
 MEM_GIB=$((MEM_KB/1024/1024))
 DISK_GIB=$(( $(lsblk -b -n -d -o SIZE "$DISK") /1024/1024/1024 ))
 
@@ -77,16 +77,22 @@ if [[ "$USE_SWAP" =~ ^[sS]$ ]]; then
     HIB=${HIB:-N}
     if (( MEM_GIB < 2 )); then
         SWAP_MIN=$((MEM_GIB*2))
-        ((HIB =~ ^[sS]$)) && SWAP_MIN=$((MEM_GIB*3))
+        if [[ "$HIB" =~ ^[sS]$ ]]; then
+            SWAP_MIN=$((MEM_GIB*3))
+        fi
     elif (( MEM_GIB < 8 )); then
-        SWAP_MIN=${MEM_GIB}
-        ((HIB =~ ^[sS]$)) && SWAP_MIN=$((MEM_GIB*2))
+        SWAP_MIN=$MEM_GIB
+        if [[ "$HIB" =~ ^[sS]$ ]]; then
+            SWAP_MIN=$((MEM_GIB*2))
+        fi
     elif (( MEM_GIB < 64 )); then
         SWAP_MIN=4
-        ((HIB =~ ^[sS]$)) && SWAP_MIN=$(printf "%d" "$(echo "${MEM_GIB}*1.5" | bc)")
+        if [[ "$HIB" =~ ^[sS]$ ]]; then
+            SWAP_MIN=$(printf "%d" "$(echo "${MEM_GIB}*1.5" | bc)")
+        fi
     else
         SWAP_MIN=4
-        if ((HIB =~ ^[sS]$)); then
+        if [[ "$HIB" =~ ^[sS]$ ]]; then
             echo "⚠️ Hibernación no recomendada con RAM >64G, se mantiene SWAP mínimo"
         fi
     fi
@@ -98,7 +104,8 @@ if [[ "$USE_SWAP" =~ ^[sS]$ ]]; then
         if (( SWAP_GIB < SWAP_MIN )); then
             echo "❌ Debe ser al menos ${SWAP_MIN}G para tu configuración de RAM/hibernación"
         else
-            echo "✅ SWAP: ${SWAP_GIB}G"; break
+            echo "✅ SWAP: ${SWAP_GIB}G"
+            break
         fi
     done
 else
@@ -117,7 +124,8 @@ while true; do
     if (( ROOT_GIB <= 0 || ROOT_GIB > AVAILABLE_GIB )); then
         echo "❌ Inválido. Usa 1-${AVAILABLE_GIB}G"
     else
-        echo "✅ ROOT: ${ROOT_GIB}G"; break
+        echo "✅ ROOT: ${ROOT_GIB}G"
+        break
     fi
 done
 
@@ -133,7 +141,9 @@ if [[ "$HOME_ASK" =~ ^[sS]$ ]] && (( AVAILABLE_GIB > 0 )); then
         if (( HOME_GIB <= 0 || HOME_GIB > AVAILABLE_GIB )); then
             echo "❌ Inválido"
         else
-            HOME_SIZE=$HOME_GIB; echo "✅ /home: ${HOME_SIZE}G"; break
+            HOME_SIZE=$HOME_GIB
+            echo "✅ /home: ${HOME_SIZE}G"
+            break
         fi
     done
 else
@@ -144,14 +154,16 @@ fi
 # RESUMEN FINAL
 # ==========================================================
 echo -e "\n== Resumen de particiones en $DISK =="
-[[ $EFI_SIZE -gt 0 ]] && echo "EFI: 300M"
-[[ $USE_SWAP =~ ^[sS]$ ]] && echo "SWAP: ${SWAP_GIB}G"
+if (( EFI_SIZE > 0 )); then echo "EFI: 300M"; fi
+if [[ "$USE_SWAP" =~ ^[sS]$ ]]; then echo "SWAP: ${SWAP_GIB}G"; fi
 echo "ROOT: ${ROOT_GIB}G"
-[[ $HOME_SIZE -gt 0 ]] && echo "/home: ${HOME_SIZE}G"
+if (( HOME_SIZE > 0 )); then echo "/home: ${HOME_SIZE}G"; fi
 echo "Espacio libre: $(( DISK_GIB - EFI_SIZE - SWAP_GIB - ROOT_GIB - HOME_SIZE ))G"
 
 read -p "Proceder con fdisk? [s/N]: " GO
-if [[ ! "$GO" =~ ^[sS]$ ]]; then echo "Cancelado"; exit 1; fi
+if [[ ! "$GO" =~ ^[sS]$ ]]; then
+    echo "Cancelado"; exit 1
+fi
 
 # ==========================================================
 # CREAR PARTICIONES con fdisk
@@ -166,7 +178,7 @@ if [[ ! "$GO" =~ ^[sS]$ ]]; then echo "Cancelado"; exit 1; fi
         echo $([[ ! $IS_UEFI ]] && echo "o")
     fi
     # SWAP
-    if [[ $USE_SWAP =~ ^[sS]$ ]]; then
+    if [[ "$USE_SWAP" =~ ^[sS]$ ]]; then
         echo "n"; echo; echo; echo "+${SWAP_GIB}G"
         echo "t"; echo; echo "82"
     fi
