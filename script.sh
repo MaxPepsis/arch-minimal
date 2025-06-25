@@ -58,7 +58,13 @@ else
 fi
 
 # Obtener RAM y disco
-MEM_KB=$(awk '/MemTotal/ {print $2}' /proc/meminfo || echo 0)
+MEM_KB=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+if [[ -z "$MEM_KB" ]]; then
+    MEM_KB=0
+fi
+MEM_GIB=$((MEM_KB/1024/1024))
+DISK_GIB=$(( $(lsblk -b -n -d -o SIZE "$DISK")/1024/1024/1024 ))
+echo 0)
 MEM_GIB=$((MEM_KB/1024/1024))
 DISK_GIB=$(( $(lsblk -b -n -d -o SIZE "$DISK")/1024/1024/1024 ))
 echo "Disco: $DISK (${DISK_GIB}G) | RAM: ${MEM_GIB}G"
