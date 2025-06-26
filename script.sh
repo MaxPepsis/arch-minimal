@@ -45,7 +45,7 @@ if [[ ! -b "$DISK" ]]; then
 fi
 
 echo "🔴 Instalación limpia: borrando tabla de particiones"
-sgdisk --zap-all "$DISK"
+sgdisk --zap-all "$DISK" || { echo "Error al borrar la tabla de particiones"; exit 1; }
 
 # Detectar modo de arranque
 echo
