@@ -142,48 +142,29 @@ read -p "Proceder con fdisk? [s/N]: " GO
 # CREACIÓN DE PARTICIONES con fdisk
 # ==========================================================
 {
-    if $IS_UEFI; then
-        # crear GPT
-        echo g
-        # EFI 300MiB
-        echo n
-        echo
-        echo
-        echo +300M
-        echo t
-        echo 1
-    else
-        # crear MBR
-        echo o
-    fi
+    echo o  # Crear una nueva tabla de particiones MBR
+    echo n  # Crear la partición ROOT
+    echo p  # Tipo de partición primaria
+    echo    # Número de partición (por defecto 1)
+    echo    # Primer sector (por defecto)
+    echo +${ROOT_GIB}G  # Tamaño de la partición ROOT
 
-    # SWAP si aplica
+    echo n  # Crear la partición HOME
+    echo p  # Tipo de partición primaria
+    echo    # Número de partición (por defecto 2)
+    echo    # Primer sector (por defecto
+    echo +${HOME_GIB}G  # Tamaño de la partición HOME
+
+    # Si se usa SWAP, crear la partición SWAP
     if [[ "$USE_SWAP" =~ ^[sS]$ ]]; then
-        echo n
-        echo
-        echo
-        echo +${SWAP_GIB}G
-        echo t
-        # para GPT cambiar tipo '19' (Linux swap); MBR usa código 82
-        if $IS_UEFI; then echo 19; else echo 82; fi
+        echo n  # Crear la partición SWAP
+        echo p  # Tipo de partición primaria
+        echo    # Número de partición (por defecto 3)
+        echo    # Primer sector (por defecto)
+        echo +${SWAP_GIB}G  # Tamaño de la partición SWAP
     fi
 
-    # ROOT siempre
-    echo n
-    echo
-    echo
-    echo +${ROOT_GIB}G
-
-    # HOME si aplica
-    if (( HOME_GIB > 0 )); then
-        echo n
-        echo
-        echo
-        echo +${HOME_GIB}G
-    fi
-
-    # escribir cambios
-    echo w
+    echo w  # Escribir cambios
 } | fdisk "$DISK"
 
 echo "✅ Particiones creadas exitosamente."
