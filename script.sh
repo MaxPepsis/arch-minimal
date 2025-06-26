@@ -141,57 +141,49 @@ read -p "Proceder con fdisk? [s/N]: " GO
 # ==========================================================
 # CREACIÓN DE PARTICIONES con fdisk
 # ==========================================================
-if $IS_UEFI; then
-    # GPT + EFI
-    fdisk "$DISK" <<EOF
- g      # crear GPT
- n      # nueva partición EFI
-
- +300M
- t      # cambiar tipo
- 1      # EFI System
- n      # swap
-
- +${SWAP_GIB}G
- t      # cambiar tipo
- 2
- 82    # Linux swap
- n      # root
-
- +${ROOT_GIB}G
-EOF
-    # partición /home
-    if (( HOME_GIB > 0 )); then
-        fdisk "$DISK" <<EOF
- n
-
- +${HOME_GIB}G
-EOF
+{
+    if $IS_UEFI; then
+        # crear GPT
+        echo g
+        # EFI 300MiB
+        echo n
+        echo
+        echo
+        echo +300M
+        echo t
+        echo 1
+    else
+        # crear MBR
+        echo o
     fi
-    # Escribir cambios
-echo w | fdisk "$DISK"
-else
-    # MBR BIOS
-    fdisk "$DISK" <<EOF
- o      # crear MBR
- n      # swap
 
- +${SWAP_GIB}G
- t      # cambiar tipo
- 1
- 82    # Linux swap
- n      # root
-
- +${ROOT_GIB}G
-EOF
-    if (( HOME_GIB > 0 )); then
-        fdisk "$DISK" <<EOF
- n
-
- +${HOME_GIB}G
-EOF
+    # SWAP si aplica
+    if [[ "$USE_SWAP" =~ ^[sS]$ ]]; then
+        echo n
+        echo
+        echo
+        echo +${SWAP_GIB}G
+        echo t
+        # para GPT cambiar tipo '19' (Linux swap); MBR usa código 82
+        if $IS_UEFI; then echo 19; else echo 82; fi
     fi
-    echo w | fdisk "$DISK"
-fi
+
+    # ROOT siempre
+    echo n
+    echo
+    echo
+    echo +${ROOT_GIB}G
+
+    # HOME si aplica
+    if (( HOME_GIB > 0 )); then
+        echo n
+        echo
+        echo
+        echo +${HOME_GIB}G
+    fi
+
+    # escribir cambios
+    echo w
+} | fdisk "$DISK"
 
 echo "✅ Particiones creadas exitosamente."
