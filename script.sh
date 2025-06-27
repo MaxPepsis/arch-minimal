@@ -171,6 +171,12 @@ if [[ -n "$HOME_PART" ]]; then
     mount "$HOME_PART" /mnt/home
 fi
 
+# Instalar sistema base y kernel por defecto (linux)
+pacstrap /mnt base base-devel nano linux linux-headers mkinitcpio linux-firmware btrfs-progs
+
+# Crear puntos de montaje necesarios
+mkdir -p /mnt/dev /mnt/proc /mnt/sys
+
 # Bind /dev /proc /sys
 for dir in dev proc sys; do
     mount --bind "/$dir" "/mnt/$dir"
@@ -210,7 +216,7 @@ arch-chroot /mnt sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/
 
 echo "✅ Usuario creado y sudo configurado."
 
-# EFISTUB
+# Configurar arranque
 if [[ $IS_UEFI -eq 1 ]]; then
     echo "Configurando arranque con EFISTUB..."
     ROOT_UUID=$(blkid -s UUID -o value "$ROOT_PART")
@@ -230,7 +236,7 @@ if [[ $IS_UEFI -eq 1 ]]; then
         arch-chroot /mnt efibootmgr --create \
             --disk "$DISK" \
             --part "$PART_NUM" \
-            --label "Arch Linux (EFISTUB)" \
+            --label "Arch Linux" \
             --loader "$KERNEL_PATH" \
             --unicode "root=UUID=$ROOT_UUID rw initrd=$INITRD_PATH" \
             --verbose
@@ -239,9 +245,14 @@ if [[ $IS_UEFI -eq 1 ]]; then
     else
         echo "❌ No se encuentra el kernel/initramfs. Instala el sistema base antes."
     fi
-fi
 
-echo "🎉 Instalación inicial completada. Puedes continuar con la instalación del sistema."
+else
+    echo "Configurando GRUB para BIOS..."
+    arch-chroot /mnt pacman -Sy --noconfirm grub
+    arch-chroot /mnt grub-install --target=i386-pc --recheck $(echo "$ROOT_PART" | grep -o '^/dev/[a-z]*')
+    arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
+    echo "✅ GRUB instalado en modo BIOS."
+fi
 
 # Desmontar bind mounts
 for dir in dev proc sys; do
