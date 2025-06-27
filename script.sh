@@ -142,13 +142,13 @@ done
 echo "Formateando particiones..."
 
 if [[ $IS_UEFI -eq 1 && -n "$EFI_PART" ]]; then
-    mkfs.fat -F32 "$EFI_PART"
+    mkfs.fat -F32 -n EFI "$EFI_PART"
 fi
 
-mkfs.btrfs "$ROOT_PART"
+mkfs.btrfs -f "$ROOT_PART"
 
 if [[ -n "$HOME_PART" ]]; then
-    mkfs.xfs "$HOME_PART"
+    mkfs.xfs -f "$HOME_PART"
 fi
 
 if [[ "$USE_SWAP" =~ ^[sS]$ && -n "$SWAP_PART" ]]; then
