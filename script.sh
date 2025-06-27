@@ -82,6 +82,7 @@ while true; do
     else
         echo "Los nombres no coinciden o están vacíos. Intenta de nuevo."
     fi
+
 done
 
 while true; do
@@ -92,6 +93,7 @@ while true; do
     else
         echo "Los nombres no coinciden o están vacíos. Intenta de nuevo."
     fi
+
 done
 
 mostrar_resumen() {
@@ -133,6 +135,7 @@ while true; do
     else
         echo "Por favor responde s (sí) o n (no)."
     fi
+
 done
 
 # Formateo de particiones
@@ -168,8 +171,32 @@ if [[ -n "$HOME_PART" ]]; then
     mount "$HOME_PART" /mnt/home
 fi
 
-# Instalar sistema base y kernel por defecto (linux)
-pacstrap /mnt base base-devel nano linux linux-headers mkinitcpio linux-firmware btrfs-progs
+# ------------------ Seleccionar kernel ------------------
+echo
+echo "¿Qué kernel deseas instalar? Elige una opción:"
+echo "1) linux         → Kernel estándar, estable y actualizado regularmente (uso general)"
+echo "2) linux-lts     → Kernel con soporte a largo plazo (estabilidad prolongada)"
+echo "3) linux-hardened→ Kernel reforzado en seguridad (entornos críticos)"
+echo "4) linux-zen     → Kernel optimizado para rendimiento (ideal para gaming)"
+echo "5) linux-rt      → Kernel en tiempo real (audio/video, robótica, ciencia)"
+echo
+
+while true; do
+    read -p "Introduce el número de tu elección [1-5]: " KERNEL_CHOICE
+    case $KERNEL_CHOICE in
+        1) KERNEL_PKG="linux linux-headers"; break ;;
+        2) KERNEL_PKG="linux-lts linux-lts-headers"; break ;;
+        3) KERNEL_PKG="linux-hardened linux-hardened-headers"; break ;;
+        4) KERNEL_PKG="linux-zen linux-zen-headers"; break ;;
+        5) KERNEL_PKG="linux-rt linux-rt-headers"; break ;;
+        *) echo "Opción inválida. Por favor elige un número del 1 al 5." ;;
+    esac
+done
+
+echo "✅ Kernel seleccionado: $KERNEL_PKG"
+
+# Instalar sistema base con kernel seleccionado
+pacstrap /mnt base base-devel nano $KERNEL_PKG mkinitcpio linux-firmware btrfs-progs
 
 # Crear puntos de montaje necesarios
 mkdir -p /mnt/dev /mnt/proc /mnt/sys
@@ -187,7 +214,7 @@ genfstab -U /mnt >> /mnt/etc/fstab
 # Configurar hostname
 echo "$HOSTNAME" > /mnt/etc/hostname
 
-# Configurar zona horaria automática
+# Configurar zona horaria automatica
 if command -v curl &>/dev/null; then
     echo "Configurando zona horaria automáticamente..."
     ZONE=$(curl -s https://ipapi.co/timezone)
@@ -204,18 +231,29 @@ fi
 # Sincronizar reloj
 arch-chroot /mnt hwclock -w
 
-# Crear usuario y darle sudo directamente
-arch-chroot /mnt useradd -m -g users -s /bin/bash "$USERNAME"
+# Crear usuario sin usar wheel
 echo "Por favor, define la contraseña para el usuario $USERNAME:"
+arch-chroot /mnt useradd -m -g users -s /bin/bash "$USERNAME"
 arch-chroot /mnt passwd "$USERNAME"
 
-# Agregar el usuario directamente debajo de root en /etc/sudoers
-arch-chroot /mnt bash -c "if ! grep -q '^$USERNAME[[:space:]]*ALL=(ALL:ALL) ALL' /etc/sudoers; then
-    sed -i \"/^root[[:space:]]*ALL=(ALL:ALL) ALL/a $USERNAME       ALL=(ALL:ALL) ALL\" /etc/sudoers
-    echo '✅ Usuario $USERNAME agregado a sudoers.'
-else
-    echo 'ℹ️  El usuario $USERNAME ya está en sudoers.'
-fi"
+# Configurar sudoers y pwfeedback
+arch-chroot /mnt bash -c "
+  if grep -q '^Defaults[[:space:]]*mail_badpass' /etc/sudoers; then
+    sed -i '/^Defaults[[:space:]]*mail_badpass/s/\$/,\pwfeedback/' /etc/sudoers
+    echo 'Se agregó ,pwfeedback a mail_badpass.'
+  else
+    echo 'No se encontró mail_badpass en /etc/sudoers.'
+  fi
+
+  if ! grep -q '^$USERNAME[[:space:]]*ALL=(ALL:ALL) ALL' /etc/sudoers; then
+    sed -i "/^root[[:space:]]*ALL=(ALL:ALL) ALL/a $USERNAME       ALL=(ALL:ALL) ALL" /etc/sudoers
+    echo 'Usuario $USERNAME añadido con permisos sudo.'
+  else
+    echo 'El usuario $USERNAME ya tiene permisos sudo.'
+  fi
+"
+
+echo "✅ Usuario creado con sudo (sin usar grupo wheel)"
 
 # Configurar arranque
 if [[ $IS_UEFI -eq 1 ]]; then
@@ -227,8 +265,8 @@ if [[ $IS_UEFI -eq 1 ]]; then
         exit 1
     fi
 
-    KERNEL_PATH="\vmlinuz-linux"
-    INITRD_PATH="\initramfs-linux.img"
+    KERNEL_PATH="\\vmlinuz-linux"
+    INITRD_PATH="\\initramfs-linux.img"
 
     if [[ -f "/mnt/boot/vmlinuz-linux" && -f "/mnt/boot/initramfs-linux.img" ]]; then
         DISK=$(echo $EFI_PART | grep -o '^/dev/[a-z]*')
@@ -246,6 +284,7 @@ if [[ $IS_UEFI -eq 1 ]]; then
     else
         echo "❌ No se encuentra el kernel/initramfs. Instala el sistema base antes."
     fi
+
 else
     echo "Configurando GRUB para BIOS..."
     arch-chroot /mnt pacman -Sy --noconfirm grub
@@ -257,4 +296,4 @@ fi
 # Desmontar bind mounts
 for dir in dev proc sys; do
     umount -l "/mnt/$dir"
-done
+don
