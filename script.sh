@@ -22,19 +22,19 @@ fi
 
 # Listar particiones disponibles
 echo "Particiones detectadas:"
-lsblk -p -o NAME,SIZE,TYPE,MOUNTPOINT | grep part
+lsblk -p -o NAME,SIZE,FSTYPE,TYPE,MOUNTPOINT | grep part
 
-# Función para desmontar si está montado
 desmontar_si_montado() {
     local PART=$1
     MNT=$(lsblk -pno MOUNTPOINT "$PART" | grep -v '^$' || true)
     if [[ -n "$MNT" ]]; then
-        echo "Desmontando $PART de $MNT..."
-        umount -R "$PART"
+        if mountpoint -q "$MNT"; then
+            echo "Desmontando $PART de $MNT..."
+            umount -R "$MNT"
+        fi
     fi
 }
 
-# Pedir particiones
 EFI_PART=""
 if [[ $IS_UEFI -eq 1 ]]; then
     while true; do
@@ -74,7 +74,6 @@ if [[ "$USE_SWAP" =~ ^[sS]$ ]]; then
     desmontar_si_montado "$SWAP_PART"
 fi
 
-# Pedir hostname con confirmación doble
 while true; do
     read -p "Nombre del equipo (hostname): " HOSTNAME
     read -p "Confirma el nombre del equipo (hostname): " HOSTNAME_CONFIRM
@@ -83,9 +82,9 @@ while true; do
     else
         echo "Los nombres no coinciden o están vacíos. Intenta de nuevo."
     fi
+
 done
 
-# Pedir usuario con confirmación doble
 while true; do
     read -p "Nombre del usuario: " USERNAME
     read -p "Confirma el nombre del usuario: " USERNAME_CONFIRM
@@ -94,9 +93,9 @@ while true; do
     else
         echo "Los nombres no coinciden o están vacíos. Intenta de nuevo."
     fi
+
 done
 
-# Función para mostrar resumen
 mostrar_resumen() {
     echo
     echo "=========================================="
@@ -124,7 +123,6 @@ mostrar_resumen() {
     echo
 }
 
-# Mostrar resumen y pedir confirmación
 mostrar_resumen
 
 while true; do
@@ -137,6 +135,7 @@ while true; do
     else
         echo "Por favor responde s (sí) o n (no)."
     fi
+
 done
 
 # Formateo de particiones
@@ -159,9 +158,7 @@ fi
 
 echo "✅ Particiones formateadas."
 
-# Montar sistema y crear puntos de montaje
-echo "Montando sistema..."
-
+# Montar sistema
 mount "$ROOT_PART" /mnt
 
 if [[ $IS_UEFI -eq 1 && -n "$EFI_PART" ]]; then
@@ -174,62 +171,79 @@ if [[ -n "$HOME_PART" ]]; then
     mount "$HOME_PART" /mnt/home
 fi
 
+# Bind /dev /proc /sys
+for dir in dev proc sys; do
+    mount --bind "/$dir" "/mnt/$dir"
+done
+
 echo "✅ Sistema montado en /mnt"
 
-# Configurar hostname
-echo "$HOSTNAME" > /etc/hostname
+# Generar fstab
+genfstab -U /mnt >> /mnt/etc/fstab
 
-# Configuración de zona horaria automática
-echo "Configurando zona horaria automáticamente..."
-ZONE=$(curl -s https://ipapi.co/timezone)
-if [[ -n "$ZONE" && -f "/usr/share/zoneinfo/$ZONE" ]]; then
-    mkdir -p /mnt/etc
-    ln -sf "/usr/share/zoneinfo/$ZONE" /mnt/etc/localtime
-    echo "✅ Zona horaria configurada en $ZONE (enlazada en /mnt/etc/localtime)"
+# Configurar hostname
+echo "$HOSTNAME" > /mnt/etc/hostname
+
+# Configurar zona horaria automatica
+if command -v curl &>/dev/null; then
+    echo "Configurando zona horaria automáticamente..."
+    ZONE=$(curl -s https://ipapi.co/timezone)
+    if [[ -n "$ZONE" && -f "/usr/share/zoneinfo/$ZONE" ]]; then
+        ln -sf "/usr/share/zoneinfo/$ZONE" /mnt/etc/localtime
+        echo "✅ Zona horaria configurada en $ZONE"
+    else
+        echo "⚠️  No se pudo determinar o validar la zona horaria."
+    fi
 else
-    echo "⚠️  No se pudo determinar o validar la zona horaria automáticamente."
+    echo "⚠️  curl no está disponible. Zona horaria no configurada."
 fi
 
-# Sincronizar reloj hardware
-echo "Sincronizando reloj del sistema con hwclock..."
+# Sincronizar reloj
 arch-chroot /mnt hwclock -w
 
-# Crear usuario y dar permisos sudo
-echo "Creando usuario '$USERNAME'..."
+# Crear usuario y sudo
 arch-chroot /mnt useradd -m -g users -G wheel -s /bin/bash "$USERNAME"
 echo "Por favor, define la contraseña para el usuario $USERNAME:"
 arch-chroot /mnt passwd "$USERNAME"
 
-# Permitir sudo al grupo wheel
-echo "Configurando permisos sudo para el grupo wheel..."
 arch-chroot /mnt sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
 
-echo "¡Configuración completada! Puedes continuar con la instalación."
+echo "✅ Usuario creado y sudo configurado."
 
-# Configuración del arranque usando EFISTUB (solo UEFI)
+# EFISTUB
 if [[ $IS_UEFI -eq 1 ]]; then
     echo "Configurando arranque con EFISTUB..."
-
     ROOT_UUID=$(blkid -s UUID -o value "$ROOT_PART")
-    KERNEL_PATH="/boot/vmlinuz-linux"
-    INITRD_PATH="/boot/initramfs-linux.img"
 
     if [[ -z "$ROOT_UUID" ]]; then
         echo "❌ No se pudo obtener UUID de $ROOT_PART"
         exit 1
     fi
 
-    if [[ ! -f "/mnt/$KERNEL_PATH" || ! -f "/mnt/$INITRD_PATH" ]]; then
-        echo "❌ No se encuentra el kernel o initramfs en /boot. Asegúrate de instalar el kernel antes de configurar EFISTUB."
-    else
+    KERNEL_PATH="\vmlinuz-linux"
+    INITRD_PATH="\initramfs-linux.img"
+
+    if [[ -f "/mnt/boot/vmlinuz-linux" && -f "/mnt/boot/initramfs-linux.img" ]]; then
+        DISK=$(echo $EFI_PART | grep -o '^/dev/[a-z]*')
+        PART_NUM=$(echo $EFI_PART | grep -o '[0-9]*$')
+
         arch-chroot /mnt efibootmgr --create \
-            --disk "$(echo $EFI_PART | grep -o '^/dev/[a-z]*')" \
-            --part "$(echo $EFI_PART | grep -o '[0-9]*$')" \
+            --disk "$DISK" \
+            --part "$PART_NUM" \
             --label "Arch Linux (EFISTUB)" \
             --loader "$KERNEL_PATH" \
             --unicode "root=UUID=$ROOT_UUID rw initrd=$INITRD_PATH" \
             --verbose
 
         echo "✅ EFISTUB configurado correctamente."
+    else
+        echo "❌ No se encuentra el kernel/initramfs. Instala el sistema base antes."
     fi
 fi
+
+echo "🎉 Instalación inicial completada. Puedes continuar con la instalación del sistema."
+
+# Desmontar bind mounts
+for dir in dev proc sys; do
+    umount -l "/mnt/$dir"
+done
