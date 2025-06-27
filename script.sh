@@ -49,6 +49,7 @@ while true; do
     read -p "Partición raíz como btrfs (ej: /dev/sda2): " ROOT_PART
     [[ -b "$ROOT_PART" ]] && break
     echo "Ruta no válida. Intenta de nuevo."
+
 done
 desmontar_si_montado "$ROOT_PART"
 
@@ -191,6 +192,7 @@ while true; do
         5) KERNEL_PKG="linux-rt linux-rt-headers"; break ;;
         *) echo "Opción inválida. Por favor elige un número del 1 al 5." ;;
     esac
+
 done
 
 echo "✅ Kernel seleccionado: $KERNEL_PKG"
@@ -231,25 +233,28 @@ fi
 # Sincronizar reloj
 arch-chroot /mnt hwclock -w
 
-# Crear usuario sin usar wheel
-echo "Por favor, define la contraseña para el usuario $USERNAME:"
+# Crear usuario sin usar grupo wheel
 arch-chroot /mnt useradd -m -g users -s /bin/bash "$USERNAME"
-arch-chroot /mnt passwd "$USERNAME"
+echo "Por favor, define la contraseña para el usuario $USERNAME:"
+while true; do
+    arch-chroot /mnt passwd "$USERNAME" && break
+    echo "❌ Las contraseñas no coinciden o falló la verificación. Intenta de nuevo."
+done
 
 # Configurar sudoers y pwfeedback
 arch-chroot /mnt bash -c "
   if grep -q '^Defaults[[:space:]]*mail_badpass' /etc/sudoers; then
     sed -i '/^Defaults[[:space:]]*mail_badpass/s/\$/,\pwfeedback/' /etc/sudoers
-    echo 'Se agregó ,pwfeedback a mail_badpass.'
+    echo '✅ Se agregó ,pwfeedback a mail_badpass.'
   else
-    echo 'No se encontró mail_badpass en /etc/sudoers.'
+    echo '⚠️  No se encontró mail_badpass en /etc/sudoers.'
   fi
 
   if ! grep -q '^$USERNAME[[:space:]]*ALL=(ALL:ALL) ALL' /etc/sudoers; then
     sed -i "/^root[[:space:]]*ALL=(ALL:ALL) ALL/a $USERNAME       ALL=(ALL:ALL) ALL" /etc/sudoers
-    echo 'Usuario $USERNAME añadido con permisos sudo.'
+    echo '✅ Usuario $USERNAME añadido con permisos sudo.'
   else
-    echo 'El usuario $USERNAME ya tiene permisos sudo.'
+    echo 'ℹ️  El usuario $USERNAME ya tiene permisos sudo.'
   fi
 "
 
@@ -296,4 +301,4 @@ fi
 # Desmontar bind mounts
 for dir in dev proc sys; do
     umount -l "/mnt/$dir"
-don
+done
