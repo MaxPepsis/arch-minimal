@@ -49,7 +49,6 @@ while true; do
     read -p "Partición raíz como btrfs (ej: /dev/sda2): " ROOT_PART
     [[ -b "$ROOT_PART" ]] && break
     echo "Ruta no válida. Intenta de nuevo."
-
 done
 desmontar_si_montado "$ROOT_PART"
 
@@ -241,6 +240,13 @@ while true; do
     echo "❌ Las contraseñas no coinciden o falló la verificación. Intenta de nuevo."
 done
 
+# Asignar contraseña de root con verificación
+while true; do
+    echo "Por favor, define la contraseña para el usuario root:"
+    arch-chroot /mnt passwd root && break
+    echo "❌ Las contraseñas no coinciden o falló la verificación. Intenta de nuevo."
+done
+
 # Configurar sudoers y pwfeedback
 arch-chroot /mnt bash -c "
   if grep -q '^Defaults[[:space:]]*mail_badpass' /etc/sudoers; then
@@ -250,7 +256,7 @@ arch-chroot /mnt bash -c "
     echo '⚠️  No se encontró mail_badpass en /etc/sudoers.'
   fi
 
-  if ! grep -q '^$USERNAME[[:space:]]*ALL=(ALL:ALL) ALL' /etc/sudoers; then
+  if ! grep -q "^$USERNAME[[:space:]]*ALL=(ALL:ALL) ALL" /etc/sudoers; then
     sed -i "/^root[[:space:]]*ALL=(ALL:ALL) ALL/a $USERNAME       ALL=(ALL:ALL) ALL" /etc/sudoers
     echo '✅ Usuario $USERNAME añadido con permisos sudo.'
   else
