@@ -177,7 +177,7 @@ fi
 echo "✅ Sistema montado en /mnt"
 
 # Configurar hostname
-echo "$HOSTNAME" > /mnt/etc/hostname
+echo "$HOSTNAME" > /etc/hostname
 
 # Configuración de zona horaria automática
 echo "Configurando zona horaria automáticamente..."
@@ -205,3 +205,31 @@ echo "Configurando permisos sudo para el grupo wheel..."
 arch-chroot /mnt sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
 
 echo "¡Configuración completada! Puedes continuar con la instalación."
+
+# Configuración del arranque usando EFISTUB (solo UEFI)
+if [[ $IS_UEFI -eq 1 ]]; then
+    echo "Configurando arranque con EFISTUB..."
+
+    ROOT_UUID=$(blkid -s UUID -o value "$ROOT_PART")
+    KERNEL_PATH="/boot/vmlinuz-linux"
+    INITRD_PATH="/boot/initramfs-linux.img"
+
+    if [[ -z "$ROOT_UUID" ]]; then
+        echo "❌ No se pudo obtener UUID de $ROOT_PART"
+        exit 1
+    fi
+
+    if [[ ! -f "/mnt/$KERNEL_PATH" || ! -f "/mnt/$INITRD_PATH" ]]; then
+        echo "❌ No se encuentra el kernel o initramfs en /boot. Asegúrate de instalar el kernel antes de configurar EFISTUB."
+    else
+        arch-chroot /mnt efibootmgr --create \
+            --disk "$(echo $EFI_PART | grep -o '^/dev/[a-z]*')" \
+            --part "$(echo $EFI_PART | grep -o '[0-9]*$')" \
+            --label "Arch Linux (EFISTUB)" \
+            --loader "$KERNEL_PATH" \
+            --unicode "root=UUID=$ROOT_UUID rw initrd=$INITRD_PATH" \
+            --verbose
+
+        echo "✅ EFISTUB configurado correctamente."
+    fi
+fi
