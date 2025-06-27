@@ -1,170 +1,207 @@
 #!/bin/bash
 set -e
 
-# ==========================================================
-# FUNCIONES AUXILIARES
-# ==========================================================
-convert_to_gib() {
-    local size_input="$1"
-    local num unit
-    num=$(echo "$size_input" | grep -oP '^[0-9]+(\.[0-9]+)?')
-    unit=$(echo "$size_input" | grep -oP '[MG]$' | tr '[:upper:]' '[:lower:]')
-    [[ -z "$unit" ]] && unit="g"
-    case "$unit" in
-        m) printf "%d" "$(echo "$num/1024" | bc)" ;; # MiB -> GiB
-        g)
-            if [[ "$num" =~ \.[0-9]+ ]]; then
-                printf "%d" "$(echo "$num+0.999" | bc)"
-            else
-                printf "%d" "$num"
-            fi
-            ;;
-        *) echo "0" ;;
-    esac
+clear
+echo ">>> Instalador rápido e interactivo"
+echo ">>> Este script solo formateará particiones existentes, no las creará."
+
+read -p "¿Deseas continuar con el formateo? [s/N]: " CONFIRM
+if [[ ! "$CONFIRM" =~ ^[sS]$ ]]; then
+    echo "Cancelado por el usuario."
+    exit 1
+fi
+
+# Detectar si es UEFI o BIOS
+if [[ -d /sys/firmware/efi/efivars ]]; then
+    IS_UEFI=1
+    echo "Modo UEFI detectado."
+else
+    IS_UEFI=0
+    echo "Modo BIOS detectado."
+fi
+
+# Listar particiones disponibles
+echo "Particiones detectadas:"
+lsblk -p -o NAME,SIZE,TYPE,MOUNTPOINT | grep part
+
+# Función para desmontar si está montado
+desmontar_si_montado() {
+    local PART=$1
+    MNT=$(lsblk -pno MOUNTPOINT "$PART" | grep -v '^$' || true)
+    if [[ -n "$MNT" ]]; then
+        echo "Desmontando $PART de $MNT..."
+        umount -R "$PART"
+    fi
 }
 
-# ==========================================================
-# CONFIGURACIÓN INICIAL
-# ==========================================================
-echo ">>> Instalador de particiones interactivo"
-echo ">>> Al usar esta herramienta, confirma que entiendes que borrará todos los datos."
-read -p "¿Deseas continuar con la instalación? [s/N]: " CONFIRM
-if [[ ! "$CONFIRM" =~ ^[sS]$ ]]; then
-    echo "Cancelado por el usuario."; exit 1
-fi
-
-# Listar discos disponibles
-echo "Discos disponibles:"
-lsblk -d -p -o NAME,SIZE,MODEL,TYPE | grep disk
-
-# Seleccionar disco
-echo
-read -p "Introduce la ruta de tu disco (ej: /dev/sda): " DISK
-if [[ ! -b "$DISK" ]]; then
-    echo "❌ Disco inválido."; exit 1
-fi
-
-echo "🔴 Instalación limpia: borrando tabla de particiones"
-sgdisk --zap-all "$DISK" || { echo "Error al borrar la tabla de particiones"; exit 1; }
-
-# Detectar modo de arranque
-echo
-IS_UEFI=false; EFI_SIZE=0
-if [ -d /sys/firmware/efi ]; then
-    IS_UEFI=true; EFI_SIZE=1
-    echo "✅ UEFI detectado: se creará partición EFI 300MiB"
-else
-    echo "ℹ️ Modo BIOS detectado: sin EFI"
-fi
-
-# Obtener RAM y disco
-MEM_KB=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
-if [[ -z "$MEM_KB" ]]; then
-    MEM_KB=0
-fi
-MEM_GIB=$((MEM_KB/1024/1024))
-DISK_SIZE_BYTES=$(lsblk -b -n -d -o SIZE "$DISK")
-DISK_GIB=$((DISK_SIZE_BYTES/1024/1024/1024))
-echo "Disco: $DISK (${DISK_GIB}G) | RAM: ${MEM_GIB}G"
-
-# ==========================================================
-# SWAP (OPCIONAL)
-# ==========================================================
-read -p "¿Deseas usar SWAP? [s/N]: " USE_SWAP; USE_SWAP=${USE_SWAP:-N}
-SWAP_GIB=0
-if [[ "$USE_SWAP" =~ ^[sS]$ ]]; then
-    read -p "¿Vas a usar hibernación? [s/N]: " HIB; HIB=${HIB:-N}
-    # Calcular mínimo
-    if (( MEM_GIB < 2 )); then
-        SWAP_MIN=$((MEM_GIB*2))
-        [[ "$HIB" =~ ^[sS]$ ]] && SWAP_MIN=$((MEM_GIB*3))
-    elif (( MEM_GIB < 8 )); then
-        SWAP_MIN=$MEM_GIB
-        [[ "$HIB" =~ ^[sS]$ ]] && SWAP_MIN=$((MEM_GIB*2))
-    elif (( MEM_GIB < 64 )); then
-        SWAP_MIN=4
-        [[ "$HIB" =~ ^[sS]$ ]] && SWAP_MIN=$(printf "%d" "$(echo "${MEM_GIB}*1.5"|bc)")
-    else
-        SWAP_MIN=4
-        [[ "$HIB" =~ ^[sS]$ ]] && echo "⚠️ Hibernación no recomendada con RAM>64G"
-    fi
-    # Forzar al menos 2 GiB
-    (( SWAP_MIN<2 )) && SWAP_MIN=2
-    echo "Tamaño SWAP recomendado: ${SWAP_MIN}G"
+# Pedir particiones
+EFI_PART=""
+if [[ $IS_UEFI -eq 1 ]]; then
     while true; do
-        read -p "Tamaño SWAP [${SWAP_MIN}G]: " SWAP_RAW
-        SWAP_RAW=${SWAP_RAW:-${SWAP_MIN}G}
-        SWAP_GIB=$(convert_to_gib "$SWAP_RAW")
-        (( SWAP_GIB<SWAP_MIN )) && echo "❌ Mínimo ${SWAP_MIN}G" || { echo "✅ SWAP: ${SWAP_GIB}G"; break; }
+        read -p "Partición EFI (ej: /dev/sda1): " EFI_PART
+        [[ -b "$EFI_PART" ]] && break
+        echo "Ruta no válida. Intenta de nuevo."
     done
-else
-    echo "ℹ️ Omitiendo SWAP"
+    desmontar_si_montado "$EFI_PART"
 fi
 
-# ==========================================================
-# ROOT y HOME
-# ==========================================================
-USED=$((EFI_SIZE+SWAP_GIB))
-AVAIL=$((DISK_GIB-USED))
 while true; do
-    read -p "Tamaño ROOT (disp ${AVAIL}G): " RRAW
-    ROOT_GIB=$(convert_to_gib "$RRAW")
-    (( ROOT_GIB>0 && ROOT_GIB<=AVAIL )) && { echo "✅ ROOT: ${ROOT_GIB}G"; break; } || echo "❌ Usa 1-${AVAIL}G"
+    read -p "Partición raíz como btrfs (ej: /dev/sda2): " ROOT_PART
+    [[ -b "$ROOT_PART" ]] && break
+    echo "Ruta no válida. Intenta de nuevo."
+done
+desmontar_si_montado "$ROOT_PART"
+
+read -p "¿Deseas formatear /home como xfs separado? [s/N]: " SEPARATE_HOME
+HOME_PART=""
+if [[ "$SEPARATE_HOME" =~ ^[sS]$ ]]; then
+    while true; do
+        read -p "Partición /home (ej: /dev/sda3): " HOME_PART
+        [[ -b "$HOME_PART" ]] && break
+        echo "Ruta no válida. Intenta de nuevo."
+    done
+    desmontar_si_montado "$HOME_PART"
+fi
+
+read -p "¿Deseas usar SWAP? [s/N]: " USE_SWAP
+SWAP_PART=""
+if [[ "$USE_SWAP" =~ ^[sS]$ ]]; then
+    while true; do
+        read -p "Partición SWAP (ej: /dev/sda4): " SWAP_PART
+        [[ -b "$SWAP_PART" ]] && break
+        echo "Ruta no válida. Intenta de nuevo."
+    done
+    desmontar_si_montado "$SWAP_PART"
+fi
+
+# Pedir hostname con confirmación doble
+while true; do
+    read -p "Nombre del equipo (hostname): " HOSTNAME
+    read -p "Confirma el nombre del equipo (hostname): " HOSTNAME_CONFIRM
+    if [[ "$HOSTNAME" == "$HOSTNAME_CONFIRM" && -n "$HOSTNAME" ]]; then
+        break
+    else
+        echo "Los nombres no coinciden o están vacíos. Intenta de nuevo."
+    fi
 done
 
-USED=$((USED+ROOT_GIB)); AVAIL=$((DISK_GIB-USED))
-read -p "Crear /home? Esp ${AVAIL}G [s/N]: " HASK; HASK=${HASK:-N}
-HOME_GIB=0
-if [[ "$HASK" =~ ^[sS]$ && $AVAIL -gt 0 ]]; then
-    while true; do
-        read -p "Tamaño /home (1-${AVAIL}G): " HRAW
-        HOME_GIB=$(convert_to_gib "$HRAW")
-        (( HOME_GIB>0 && HOME_GIB<=AVAIL )) && { echo "✅ /home: ${HOME_GIB}G"; break; } || echo "❌ Usa 1-${AVAIL}G"
-    done
-else
-    echo "ℹ️ /home incluido en ROOT"
+# Pedir usuario con confirmación doble
+while true; do
+    read -p "Nombre del usuario: " USERNAME
+    read -p "Confirma el nombre del usuario: " USERNAME_CONFIRM
+    if [[ "$USERNAME" == "$USERNAME_CONFIRM" && -n "$USERNAME" ]]; then
+        break
+    else
+        echo "Los nombres no coinciden o están vacíos. Intenta de nuevo."
+    fi
+done
+
+# Función para mostrar resumen
+mostrar_resumen() {
+    echo
+    echo "=========================================="
+    echo "Resumen de particiones y configuración:"
+    echo "=========================================="
+    if [[ $IS_UEFI -eq 1 ]]; then
+        echo "EFI:       $EFI_PART"
+    else
+        echo "EFI:       No aplica (Modo BIOS)"
+    fi
+    echo "Root (btrfs): $ROOT_PART"
+    if [[ -n "$HOME_PART" ]]; then
+        echo "Home (xfs):   $HOME_PART"
+    else
+        echo "Home:         No separado"
+    fi
+    if [[ "$USE_SWAP" =~ ^[sS]$ ]]; then
+        echo "SWAP:         $SWAP_PART"
+    else
+        echo "SWAP:         No"
+    fi
+    echo "Hostname:     $HOSTNAME"
+    echo "Usuario:      $USERNAME"
+    echo "=========================================="
+    echo
+}
+
+# Mostrar resumen y pedir confirmación
+mostrar_resumen
+
+while true; do
+    read -p "¿Confirmas que esta configuración es correcta para proceder con el formateo? [s/N]: " CONF
+    if [[ "$CONF" =~ ^[sS]$ ]]; then
+        break
+    elif [[ "$CONF" =~ ^[nN]$ || -z "$CONF" ]]; then
+        echo "Cancelado por el usuario."
+        exit 1
+    else
+        echo "Por favor responde s (sí) o n (no)."
+    fi
+done
+
+# Formateo de particiones
+echo "Formateando particiones..."
+
+if [[ $IS_UEFI -eq 1 && -n "$EFI_PART" ]]; then
+    mkfs.fat -F32 "$EFI_PART"
 fi
 
-# ==========================================================
-# RESUMEN
-# ==========================================================
-echo -e "\n== Resumen en $DISK =="
-((EFI_SIZE)) && echo "EFI:300M"
-[[ "$USE_SWAP" =~ ^[sS]$ ]] && echo "SWAP:${SWAP_GIB}G"
-echo "ROOT:${ROOT_GIB}G"
-((HOME_GIB)) && echo "/home:${HOME_GIB}G"
-echo "Libre:$((DISK_GIB-EFI_SIZE-SWAP_GIB-ROOT_GIB-HOME_GIB))G"
+mkfs.btrfs "$ROOT_PART"
 
-read -p "Proceder con fdisk? [s/N]: " GO
-[[ "$GO" =~ ^[sS]$ ]] || { echo "Cancelado"; exit 1; }
+if [[ -n "$HOME_PART" ]]; then
+    mkfs.xfs "$HOME_PART"
+fi
 
-# ==========================================================
-# CREACIÓN DE PARTICIONES con fdisk
-# ==========================================================
-{
-    echo o  # Crear una nueva tabla de particiones MBR
-    echo n  # Crear la partición ROOT
-    echo p  # Tipo de partición primaria
-    echo    # Número de partición (por defecto 1)
-    echo    # Primer sector (por defecto)
-    echo +${ROOT_GIB}G  # Tamaño de la partición ROOT
+if [[ "$USE_SWAP" =~ ^[sS]$ && -n "$SWAP_PART" ]]; then
+    mkswap "$SWAP_PART"
+    swapon "$SWAP_PART"
+fi
 
-    echo n  # Crear la partición HOME
-    echo p  # Tipo de partición primaria
-    echo    # Número de partición (por defecto 2)
-    echo    # Primer sector (por defecto
-    echo +${HOME_GIB}G  # Tamaño de la partición HOME
+echo "✅ Particiones formateadas."
 
-    # Si se usa SWAP, crear la partición SWAP
-    if [[ "$USE_SWAP" =~ ^[sS]$ ]]; then
-        echo n  # Crear la partición SWAP
-        echo p  # Tipo de partición primaria
-        echo    # Número de partición (por defecto 3)
-        echo    # Primer sector (por defecto)
-        echo +${SWAP_GIB}G  # Tamaño de la partición SWAP
-    fi
+# Montar sistema y crear puntos de montaje
+echo "Montando sistema..."
 
-    echo w  # Escribir cambios
-} | fdisk "$DISK"
+mount "$ROOT_PART" /mnt
 
-echo "✅ Particiones creadas exitosamente."
+if [[ $IS_UEFI -eq 1 && -n "$EFI_PART" ]]; then
+    mkdir -p /mnt/boot/efi
+    mount "$EFI_PART" /mnt/boot/efi
+fi
+
+if [[ -n "$HOME_PART" ]]; then
+    mkdir -p /mnt/home
+    mount "$HOME_PART" /mnt/home
+fi
+
+echo "✅ Sistema montado en /mnt"
+
+# Configurar hostname
+echo "$HOSTNAME" > /mnt/etc/hostname
+
+# Configuración de zona horaria automática
+echo "Configurando zona horaria automáticamente..."
+ZONE=$(curl -s https://ipapi.co/timezone)
+if [[ -n "$ZONE" && -f "/usr/share/zoneinfo/$ZONE" ]]; then
+    mkdir -p /mnt/etc
+    ln -sf "/usr/share/zoneinfo/$ZONE" /mnt/etc/localtime
+    echo "✅ Zona horaria configurada en $ZONE (enlazada en /mnt/etc/localtime)"
+else
+    echo "⚠️  No se pudo determinar o validar la zona horaria automáticamente."
+fi
+
+# Sincronizar reloj hardware
+echo "Sincronizando reloj del sistema con hwclock..."
+arch-chroot /mnt hwclock -w
+
+# Crear usuario y dar permisos sudo
+echo "Creando usuario '$USERNAME'..."
+arch-chroot /mnt useradd -m -g users -G wheel -s /bin/bash "$USERNAME"
+echo "Por favor, define la contraseña para el usuario $USERNAME:"
+arch-chroot /mnt passwd "$USERNAME"
+
+# Permitir sudo al grupo wheel
+echo "Configurando permisos sudo para el grupo wheel..."
+arch-chroot /mnt sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
+
+echo "¡Configuración completada! Puedes continuar con la instalación."
