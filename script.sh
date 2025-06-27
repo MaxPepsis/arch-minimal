@@ -82,7 +82,6 @@ while true; do
     else
         echo "Los nombres no coinciden o están vacíos. Intenta de nuevo."
     fi
-
 done
 
 while true; do
@@ -93,7 +92,6 @@ while true; do
     else
         echo "Los nombres no coinciden o están vacíos. Intenta de nuevo."
     fi
-
 done
 
 mostrar_resumen() {
@@ -135,7 +133,6 @@ while true; do
     else
         echo "Por favor responde s (sí) o n (no)."
     fi
-
 done
 
 # Formateo de particiones
@@ -190,7 +187,7 @@ genfstab -U /mnt >> /mnt/etc/fstab
 # Configurar hostname
 echo "$HOSTNAME" > /mnt/etc/hostname
 
-# Configurar zona horaria automatica
+# Configurar zona horaria automática
 if command -v curl &>/dev/null; then
     echo "Configurando zona horaria automáticamente..."
     ZONE=$(curl -s https://ipapi.co/timezone)
@@ -207,14 +204,18 @@ fi
 # Sincronizar reloj
 arch-chroot /mnt hwclock -w
 
-# Crear usuario y sudo
-arch-chroot /mnt useradd -m -g users -G wheel -s /bin/bash "$USERNAME"
+# Crear usuario y darle sudo directamente
+arch-chroot /mnt useradd -m -g users -s /bin/bash "$USERNAME"
 echo "Por favor, define la contraseña para el usuario $USERNAME:"
 arch-chroot /mnt passwd "$USERNAME"
 
-arch-chroot /mnt sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
-
-echo "✅ Usuario creado y sudo configurado."
+# Agregar el usuario directamente debajo de root en /etc/sudoers
+arch-chroot /mnt bash -c "if ! grep -q '^$USERNAME[[:space:]]*ALL=(ALL:ALL) ALL' /etc/sudoers; then
+    sed -i \"/^root[[:space:]]*ALL=(ALL:ALL) ALL/a $USERNAME       ALL=(ALL:ALL) ALL\" /etc/sudoers
+    echo '✅ Usuario $USERNAME agregado a sudoers.'
+else
+    echo 'ℹ️  El usuario $USERNAME ya está en sudoers.'
+fi"
 
 # Configurar arranque
 if [[ $IS_UEFI -eq 1 ]]; then
@@ -245,7 +246,6 @@ if [[ $IS_UEFI -eq 1 ]]; then
     else
         echo "❌ No se encuentra el kernel/initramfs. Instala el sistema base antes."
     fi
-
 else
     echo "Configurando GRUB para BIOS..."
     arch-chroot /mnt pacman -Sy --noconfirm grub
